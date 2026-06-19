@@ -1,0 +1,1105 @@
+import { useState, useMemo } from "react";
+import {
+  LayoutDashboard,
+  Users,
+  Package,
+  FileText,
+  BarChart3,
+  Plus,
+  Search,
+  Trash2,
+  Pencil,
+  X,
+  TrendingUp,
+  TrendingDown,
+  AlertTriangle,
+  ChevronRight,
+  Receipt,
+  Printer,
+} from "lucide-react";
+
+const initialCustomers = [
+  { id: "c1", kind: "company", name: "株式会社 山田商事", contact: "山田 太郎", phone: "06-1234-5678", email: "yamada@example.com", address: "大阪府大阪市北区1-2-3" },
+  { id: "c2", kind: "company", name: "鈴木工業株式会社", contact: "鈴木 一郎", phone: "03-2345-6789", email: "suzuki@example.com", address: "東京都千代田区4-5-6" },
+  { id: "c3", kind: "individual", name: "田中 花子", contact: "", phone: "075-345-6789", email: "tanaka@example.com", address: "京都府京都市中京区7-8-9" },
+  { id: "c4", kind: "individual", name: "佐藤 健一", contact: "", phone: "090-1111-2222", email: "sato.kenichi@example.com", address: "兵庫県神戸市灘区2-3-4" },
+];
+
+const honorific = (customer) => (customer?.kind === "individual" ? "様" : "御中");
+const kindLabel = (kind) => (kind === "individual" ? "個人" : "法人");
+
+const PAYMENT_METHODS = [
+  ["bank_transfer", "銀行振込"],
+  ["cash", "現金"],
+  ["credit_card", "クレジットカード"],
+  ["e_money", "電子マネー・QRコード決済"],
+  ["cod", "代金引換"],
+];
+const paymentLabel = (v) => PAYMENT_METHODS.find(([k]) => k === v)?.[1] ?? "—";
+
+const initialProducts = [
+  { id: "p1", name: "事務用デスク A型", price: 18000, stock: 12, unit: "台", lowStock: 5 },
+  { id: "p2", name: "オフィスチェア B型", price: 9500, stock: 3, unit: "台", lowStock: 5 },
+  { id: "p3", name: "ノートPCスタンド", price: 2400, stock: 40, unit: "個", lowStock: 10 },
+  { id: "p4", name: "LED デスクライト", price: 3200, stock: 8, unit: "個", lowStock: 10 },
+];
+
+const initialInvoices = [
+  {
+    id: "INV-0001",
+    type: "invoice",
+    customerId: "c1",
+    date: "2026-06-01",
+    dueDate: "2026-06-30",
+    status: "paid",
+    paymentMethod: "bank_transfer",
+    items: [{ productId: "p1", qty: 2, price: 18000 }, { productId: "p3", qty: 4, price: 2400 }],
+  },
+  {
+    id: "INV-0002",
+    type: "invoice",
+    customerId: "c2",
+    date: "2026-06-10",
+    dueDate: "2026-07-10",
+    status: "unpaid",
+    paymentMethod: "bank_transfer",
+    items: [{ productId: "p2", qty: 5, price: 9500 }],
+  },
+  {
+    id: "EST-0001",
+    type: "estimate",
+    customerId: "c3",
+    date: "2026-06-15",
+    dueDate: "2026-06-30",
+    status: "draft",
+    paymentMethod: "cash",
+    items: [{ productId: "p4", qty: 10, price: 3200 }],
+  },
+  {
+    id: "INV-0003",
+    type: "invoice",
+    customerId: "c4",
+    date: "2026-06-12",
+    dueDate: "2026-06-12",
+    status: "paid",
+    paymentMethod: "cash",
+    items: [{ productId: "p4", qty: 1, price: 3200 }],
+  },
+];
+
+const yen = (n) => "¥" + Math.round(n).toLocaleString("ja-JP");
+const today = () => new Date().toISOString().slice(0, 10);
+
+function NavItem({ icon: Icon, label, active, onClick, badge }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+        active ? "bg-[#1c3d34] text-white" : "text-[#5a6a64] hover:bg-[#e8ece9]"
+      }`}
+    >
+      <Icon size={18} strokeWidth={2} />
+      <span className="flex-1 text-left">{label}</span>
+      {badge ? (
+        <span className={`text-xs px-1.5 py-0.5 rounded-full ${active ? "bg-white/20" : "bg-[#d9665a] text-white"}`}>
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function StatCard({ label, value, sub, trend, icon: Icon }) {
+  return (
+    <div className="bg-white rounded-xl border border-[#e3e3dd] p-5 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-[#8a8a82] tracking-wide">{label}</span>
+        <Icon size={16} className="text-[#b8b8ae]" />
+      </div>
+      <div className="text-2xl font-semibold text-[#23241f] tabular-nums">{value}</div>
+      {sub ? (
+        <div className={`flex items-center gap-1 text-xs font-medium ${trend === "up" ? "text-[#2e7d5b]" : trend === "down" ? "text-[#c0524a]" : "text-[#8a8a82]"}`}>
+          {trend === "up" ? <TrendingUp size={13} /> : trend === "down" ? <TrendingDown size={13} /> : null}
+          {sub}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className={`bg-white rounded-2xl shadow-xl w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[90vh] overflow-y-auto`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#ececec] sticky top-0 bg-white">
+          <h3 className="font-semibold text-[#23241f]">{title}</h3>
+          <button onClick={onClose} className="text-[#9a9a92] hover:text-[#23241f]">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block mb-3">
+      <span className="block text-xs font-medium text-[#6a6a62] mb-1">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls =
+  "w-full px-3 py-2 rounded-lg border border-[#dadad2] text-sm focus:outline-none focus:ring-2 focus:ring-[#1c3d34]/30 focus:border-[#1c3d34]";
+
+const STATUS_LABEL = {
+  paid: "支払済み",
+  unpaid: "未払い",
+  draft: "ドラフト",
+  sent: "送付済み",
+};
+const STATUS_COLOR = {
+  paid: "bg-[#e3f0e8] text-[#2e7d5b]",
+  unpaid: "bg-[#fbe9e7] text-[#c0524a]",
+  draft: "bg-[#eef0ec] text-[#6a6a62]",
+  sent: "bg-[#e7eef7] text-[#3a64a8]",
+};
+
+export default function SalesApp() {
+  const [page, setPage] = useState("dashboard");
+  const [customers, setCustomers] = useState(initialCustomers);
+  const [products, setProducts] = useState(initialProducts);
+  const [invoices, setInvoices] = useState(initialInvoices);
+
+  const [customerModal, setCustomerModal] = useState(null);
+  const [productModal, setProductModal] = useState(null);
+  const [docModal, setDocModal] = useState(null);
+  const [receiptDoc, setReceiptDoc] = useState(null);
+  const [search, setSearch] = useState("");
+
+  const customerById = (id) => customers.find((c) => c.id === id);
+
+  const docTotal = (doc) => doc.items.reduce((sum, it) => sum + it.qty * it.price, 0);
+
+  const stats = useMemo(() => {
+    const paidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "paid");
+    const unpaidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "unpaid");
+    const totalSales = paidInvoices.reduce((s, d) => s + docTotal(d), 0);
+    const unpaidTotal = unpaidInvoices.reduce((s, d) => s + docTotal(d), 0);
+    const lowStockCount = products.filter((p) => p.stock <= p.lowStock).length;
+    return { totalSales, unpaidTotal, lowStockCount, unpaidCount: unpaidInvoices.length };
+  }, [invoices, products]);
+
+  const saveCustomer = (data) => {
+    if (data.id) {
+      setCustomers((cs) => cs.map((c) => (c.id === data.id ? data : c)));
+    } else {
+      setCustomers((cs) => [...cs, { ...data, id: "c" + (cs.length + 1) + "_" + Date.now() }]);
+    }
+    setCustomerModal(null);
+  };
+  const deleteCustomer = (id) => {
+    if (invoices.some((d) => d.customerId === id)) {
+      alert("この取引先には見積書/請求書の履歴があるため削除できません。");
+      return;
+    }
+    setCustomers((cs) => cs.filter((c) => c.id !== id));
+  };
+
+  const saveProduct = (data) => {
+    if (data.id) {
+      setProducts((ps) => ps.map((p) => (p.id === data.id ? data : p)));
+    } else {
+      setProducts((ps) => [...ps, { ...data, id: "p" + (ps.length + 1) + "_" + Date.now() }]);
+    }
+    setProductModal(null);
+  };
+  const deleteProduct = (id) => setProducts((ps) => ps.filter((p) => p.id !== id));
+
+  const saveDoc = (data) => {
+    if (data.id && invoices.some((d) => d.id === data.id)) {
+      setInvoices((ds) => ds.map((d) => (d.id === data.id ? data : d)));
+    } else {
+      const prefix = data.type === "estimate" ? "EST" : "INV";
+      const count = invoices.filter((d) => d.type === data.type).length + 1;
+      const id = `${prefix}-${String(count).padStart(4, "0")}`;
+      setInvoices((ds) => [...ds, { ...data, id }]);
+    }
+    setDocModal(null);
+  };
+  const deleteDoc = (id) => setInvoices((ds) => ds.filter((d) => d.id !== id));
+
+  const convertToInvoice = (estimate) => {
+    const count = invoices.filter((d) => d.type === "invoice").length + 1;
+    const newInvoice = {
+      ...estimate,
+      id: `INV-${String(count).padStart(4, "0")}`,
+      type: "invoice",
+      status: "unpaid",
+      date: today(),
+    };
+    setInvoices((ds) => [...ds, newInvoice]);
+    setPage("invoices");
+  };
+
+  const filteredCustomers = customers.filter(
+    (c) => c.name.includes(search) || (c.contact ?? "").includes(search)
+  );
+  const filteredProducts = products.filter((p) => p.name.includes(search));
+  const filteredDocs = (type) =>
+    invoices
+      .filter((d) => d.type === type)
+      .filter((d) => {
+        const cust = customerById(d.customerId);
+        return !search || cust?.name.includes(search) || d.id.includes(search);
+      })
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const navConfig = [
+    { key: "dashboard", label: "ダッシュボード", icon: LayoutDashboard },
+    { key: "customers", label: "取引先", icon: Users },
+    { key: "products", label: "商品・在庫", icon: Package, badge: stats.lowStockCount || null },
+    { key: "estimates", label: "見積書", icon: FileText },
+    { key: "invoices", label: "請求書", icon: FileText, badge: stats.unpaidCount || null },
+    { key: "reports", label: "売上レポート", icon: BarChart3 },
+  ];
+
+  return (
+    <div className="flex h-screen bg-[#f4f3ee] text-[#23241f]" style={{ fontFamily: "'Hiragino Sans', 'Noto Sans JP', sans-serif" }}>
+      <aside className="w-60 bg-[#fbfaf6] border-r border-[#e3e3dd] flex flex-col p-4 shrink-0">
+        <div className="flex items-center gap-2 px-2 py-3 mb-4">
+          <div className="w-8 h-8 rounded-lg bg-[#1c3d34] flex items-center justify-center text-white font-bold text-sm">販</div>
+          <div>
+            <div className="font-semibold text-sm leading-tight">販売管理</div>
+            <div className="text-[11px] text-[#9a9a92]">Sales Manager</div>
+          </div>
+        </div>
+        <nav className="flex flex-col gap-1">
+          {navConfig.map((n) => (
+            <NavItem
+              key={n.key}
+              icon={n.icon}
+              label={n.label}
+              badge={n.badge}
+              active={page === n.key}
+              onClick={() => {
+                setPage(n.key);
+                setSearch("");
+              }}
+            />
+          ))}
+        </nav>
+        <div className="mt-auto px-2 py-3 text-[11px] text-[#aaa9a0] leading-relaxed">
+          このデモはブラウザ内のメモリにのみデータを保持します。再読み込みすると初期データに戻ります。
+        </div>
+      </aside>
+
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-6xl mx-auto p-8">
+          {page === "dashboard" && (
+            <DashboardPage
+              stats={stats}
+              invoices={invoices}
+              customerById={customerById}
+              docTotal={docTotal}
+              products={products}
+              setPage={setPage}
+            />
+          )}
+
+          {page === "customers" && (
+            <ListPage
+              title="取引先"
+              actionLabel="取引先を追加"
+              onAction={() => setCustomerModal({})}
+              search={search}
+              setSearch={setSearch}
+              searchPlaceholder="氏名・会社名・担当者名で検索"
+            >
+              <CustomerTable
+                rows={filteredCustomers}
+                onEdit={(c) => setCustomerModal(c)}
+                onDelete={deleteCustomer}
+              />
+            </ListPage>
+          )}
+
+          {page === "products" && (
+            <ListPage
+              title="商品・在庫"
+              actionLabel="商品を追加"
+              onAction={() => setProductModal({})}
+              search={search}
+              setSearch={setSearch}
+              searchPlaceholder="商品名で検索"
+            >
+              <ProductTable
+                rows={filteredProducts}
+                onEdit={(p) => setProductModal(p)}
+                onDelete={deleteProduct}
+              />
+            </ListPage>
+          )}
+
+          {(page === "estimates" || page === "invoices") && (
+            <ListPage
+              title={page === "estimates" ? "見積書" : "請求書"}
+              actionLabel={page === "estimates" ? "見積書を作成" : "請求書を作成"}
+              onAction={() =>
+                setDocModal({ type: page === "estimates" ? "estimate" : "invoice", date: today(), items: [] })
+              }
+              search={search}
+              setSearch={setSearch}
+              searchPlaceholder="取引先名・番号で検索"
+            >
+              <DocTable
+                rows={filteredDocs(page === "estimates" ? "estimate" : "invoice")}
+                customerById={customerById}
+                docTotal={docTotal}
+                onEdit={(d) => setDocModal(d)}
+                onDelete={deleteDoc}
+                onConvert={page === "estimates" ? convertToInvoice : null}
+                onReceipt={page === "invoices" ? (d) => setReceiptDoc(d) : null}
+              />
+            </ListPage>
+          )}
+
+          {page === "reports" && (
+            <ReportsPage invoices={invoices} customerById={customerById} docTotal={docTotal} products={products} />
+          )}
+        </div>
+      </main>
+
+      {customerModal && (
+        <CustomerForm data={customerModal} onSave={saveCustomer} onClose={() => setCustomerModal(null)} />
+      )}
+      {productModal && (
+        <ProductForm data={productModal} onSave={saveProduct} onClose={() => setProductModal(null)} />
+      )}
+      {docModal && (
+        <DocForm
+          data={docModal}
+          customers={customers}
+          products={products}
+          onSave={saveDoc}
+          onClose={() => setDocModal(null)}
+        />
+      )}
+      {receiptDoc && (
+        <ReceiptModal
+          doc={receiptDoc}
+          customer={customerById(receiptDoc.customerId)}
+          docTotal={docTotal}
+          onClose={() => setReceiptDoc(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DashboardPage({ stats, invoices, customerById, docTotal, products, setPage }) {
+  const recentDocs = [...invoices].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 5);
+  const lowStock = products.filter((p) => p.stock <= p.lowStock);
+
+  return (
+    <div>
+      <h1 className="text-xl font-semibold mb-1">ダッシュボード</h1>
+      <p className="text-sm text-[#8a8a82] mb-6">{today()} 時点の概況</p>
+
+      <div className="grid grid-cols-4 gap-4 mb-8">
+        <StatCard label="支払済み売上合計" value={yen(stats.totalSales)} icon={TrendingUp} />
+        <StatCard
+          label="未払い請求"
+          value={yen(stats.unpaidTotal)}
+          sub={`${stats.unpaidCount}件 未収`}
+          trend={stats.unpaidCount > 0 ? "down" : null}
+          icon={AlertTriangle}
+        />
+        <StatCard
+          label="発行済みドキュメント"
+          value={`${invoices.length} 件`}
+          sub={`見積 ${invoices.filter((d) => d.type === "estimate").length}・請求 ${invoices.filter((d) => d.type === "invoice").length}`}
+          icon={FileText}
+        />
+        <StatCard
+          label="在庫アラート"
+          value={`${stats.lowStockCount} 品目`}
+          sub={stats.lowStockCount > 0 ? "発注を検討" : "問題なし"}
+          trend={stats.lowStockCount > 0 ? "down" : "up"}
+          icon={Package}
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-6">
+        <div className="col-span-2 bg-white rounded-xl border border-[#e3e3dd] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-sm">最近の見積書・請求書</h2>
+            <button onClick={() => setPage("invoices")} className="text-xs text-[#1c3d34] font-medium flex items-center gap-1 hover:underline">
+              すべて見る <ChevronRight size={14} />
+            </button>
+          </div>
+          <table className="w-full text-sm">
+            <tbody>
+              {recentDocs.map((d) => {
+                const cust = customerById(d.customerId);
+                return (
+                  <tr key={d.id} className="border-t border-[#f0f0ec]">
+                    <td className="py-2.5 text-[#8a8a82] text-xs font-mono">{d.id}</td>
+                    <td className="py-2.5">{cust?.name}</td>
+                    <td className="py-2.5 text-[#8a8a82] text-xs">{d.date}</td>
+                    <td className="py-2.5 text-right font-medium tabular-nums">{yen(docTotal(d))}</td>
+                    <td className="py-2.5 text-right">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[d.status]}`}>
+                        {STATUS_LABEL[d.status]}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="bg-white rounded-xl border border-[#e3e3dd] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-sm">在庫アラート</h2>
+            <button onClick={() => setPage("products")} className="text-xs text-[#1c3d34] font-medium flex items-center gap-1 hover:underline">
+              すべて見る <ChevronRight size={14} />
+            </button>
+          </div>
+          {lowStock.length === 0 ? (
+            <p className="text-sm text-[#8a8a82]">在庫不足の商品はありません。</p>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {lowStock.map((p) => (
+                <li key={p.id} className="flex items-center justify-between text-sm">
+                  <span>{p.name}</span>
+                  <span className="text-[#c0524a] font-medium tabular-nums">
+                    残り {p.stock}{p.unit}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ListPage({ title, actionLabel, onAction, search, setSearch, searchPlaceholder, children }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold">{title}</h1>
+        <button
+          onClick={onAction}
+          className="flex items-center gap-1.5 bg-[#1c3d34] text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-[#15302a] transition-colors"
+        >
+          <Plus size={16} /> {actionLabel}
+        </button>
+      </div>
+      <div className="relative mb-4 max-w-sm">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#aaa9a0]" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={searchPlaceholder}
+          className="w-full pl-9 pr-3 py-2 rounded-lg border border-[#dadad2] text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1c3d34]/30"
+        />
+      </div>
+      <div className="bg-white rounded-xl border border-[#e3e3dd] overflow-hidden">{children}</div>
+    </div>
+  );
+}
+
+function Th({ children, right }) {
+  return (
+    <th className={`px-4 py-3 text-xs font-semibold text-[#8a8a82] tracking-wide ${right ? "text-right" : "text-left"}`}>
+      {children}
+    </th>
+  );
+}
+
+function CustomerTable({ rows, onEdit, onDelete }) {
+  if (rows.length === 0) return <EmptyState text="取引先が見つかりません。" />;
+  return (
+    <table className="w-full text-sm">
+      <thead className="bg-[#fafaf7] border-b border-[#ececec]">
+        <tr>
+          <Th>氏名・会社名</Th>
+          <Th>区分</Th>
+          <Th>担当者</Th>
+          <Th>電話番号</Th>
+          <Th>メール</Th>
+          <Th right>操作</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((c) => (
+          <tr key={c.id} className="border-b border-[#f3f3ef] last:border-0 hover:bg-[#fafaf7]">
+            <td className="px-4 py-3 font-medium">{c.name}</td>
+            <td className="px-4 py-3">
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${c.kind === "individual" ? "bg-[#e7eef7] text-[#3a64a8]" : "bg-[#eef0ec] text-[#6a6a62]"}`}>
+                {kindLabel(c.kind)}
+              </span>
+            </td>
+            <td className="px-4 py-3 text-[#5a5a52]">{c.contact || "—"}</td>
+            <td className="px-4 py-3 text-[#5a5a52]">{c.phone}</td>
+            <td className="px-4 py-3 text-[#5a5a52]">{c.email}</td>
+            <td className="px-4 py-3 text-right">
+              <RowActions onEdit={() => onEdit(c)} onDelete={() => onDelete(c.id)} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ProductTable({ rows, onEdit, onDelete }) {
+  if (rows.length === 0) return <EmptyState text="商品が見つかりません。" />;
+  return (
+    <table className="w-full text-sm">
+      <thead className="bg-[#fafaf7] border-b border-[#ececec]">
+        <tr>
+          <Th>商品名</Th>
+          <Th right>単価</Th>
+          <Th right>在庫数</Th>
+          <Th>状態</Th>
+          <Th right>操作</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((p) => {
+          const low = p.stock <= p.lowStock;
+          return (
+            <tr key={p.id} className="border-b border-[#f3f3ef] last:border-0 hover:bg-[#fafaf7]">
+              <td className="px-4 py-3 font-medium">{p.name}</td>
+              <td className="px-4 py-3 text-right tabular-nums">{yen(p.price)}</td>
+              <td className="px-4 py-3 text-right tabular-nums">{p.stock}{p.unit}</td>
+              <td className="px-4 py-3">
+                {low ? (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-[#fbe9e7] text-[#c0524a]">残量わずか</span>
+                ) : (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-[#e3f0e8] text-[#2e7d5b]">適正</span>
+                )}
+              </td>
+              <td className="px-4 py-3 text-right">
+                <RowActions onEdit={() => onEdit(p)} onDelete={() => onDelete(p.id)} />
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function DocTable({ rows, customerById, docTotal, onEdit, onDelete, onConvert, onReceipt }) {
+  if (rows.length === 0) return <EmptyState text="該当するデータがありません。" />;
+  return (
+    <table className="w-full text-sm">
+      <thead className="bg-[#fafaf7] border-b border-[#ececec]">
+        <tr>
+          <Th>番号</Th>
+          <Th>取引先</Th>
+          <Th>発行日</Th>
+          <Th>支払方法</Th>
+          <Th right>金額</Th>
+          <Th>状態</Th>
+          <Th right>操作</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((d) => {
+          const cust = customerById(d.customerId);
+          return (
+            <tr key={d.id} className="border-b border-[#f3f3ef] last:border-0 hover:bg-[#fafaf7]">
+              <td className="px-4 py-3 font-mono text-xs text-[#5a5a52]">{d.id}</td>
+              <td className="px-4 py-3 font-medium">{cust?.name ?? "—"}</td>
+              <td className="px-4 py-3 text-[#5a5a52]">{d.date}</td>
+              <td className="px-4 py-3 text-[#5a5a52]">{paymentLabel(d.paymentMethod)}</td>
+              <td className="px-4 py-3 text-right tabular-nums font-medium">{yen(docTotal(d))}</td>
+              <td className="px-4 py-3">
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[d.status]}`}>
+                  {STATUS_LABEL[d.status]}
+                </span>
+              </td>
+              <td className="px-4 py-3 text-right">
+                <div className="flex justify-end gap-1.5">
+                  {onConvert && (
+                    <button
+                      onClick={() => onConvert(d)}
+                      className="text-xs px-2.5 py-1 rounded-md border border-[#1c3d34]/30 text-[#1c3d34] font-medium hover:bg-[#1c3d34]/5"
+                    >
+                      請求書に変換
+                    </button>
+                  )}
+                  {onReceipt && d.status === "paid" && (
+                    <button
+                      onClick={() => onReceipt(d)}
+                      className="text-xs px-2.5 py-1 rounded-md border border-[#1c3d34]/30 text-[#1c3d34] font-medium hover:bg-[#1c3d34]/5 flex items-center gap-1"
+                    >
+                      <Receipt size={12} /> 領収書
+                    </button>
+                  )}
+                  <RowActions onEdit={() => onEdit(d)} onDelete={() => onDelete(d.id)} />
+                </div>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function RowActions({ onEdit, onDelete }) {
+  return (
+    <div className="flex justify-end gap-1">
+      <button onClick={onEdit} className="p-1.5 rounded-md text-[#8a8a82] hover:bg-[#f0f0ec] hover:text-[#23241f]">
+        <Pencil size={14} />
+      </button>
+      <button
+        onClick={() => {
+          if (confirm("削除しますか？この操作は取り消せません。")) onDelete();
+        }}
+        className="p-1.5 rounded-md text-[#8a8a82] hover:bg-[#fbe9e7] hover:text-[#c0524a]"
+      >
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+}
+
+function EmptyState({ text }) {
+  return <div className="px-4 py-10 text-center text-sm text-[#9a9a92]">{text}</div>;
+}
+
+function CustomerForm({ data, onSave, onClose }) {
+  const [form, setForm] = useState({
+    id: data.id ?? null,
+    kind: data.kind ?? "individual",
+    name: data.name ?? "",
+    contact: data.contact ?? "",
+    phone: data.phone ?? "",
+    email: data.email ?? "",
+    address: data.address ?? "",
+  });
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const isIndividual = form.kind === "individual";
+
+  return (
+    <Modal title={data.id ? "取引先を編集" : "取引先を追加"} onClose={onClose}>
+      <Field label="区分">
+        <div className="flex gap-2">
+          {[["individual", "個人"], ["company", "法人"]].map(([v, l]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, kind: v }))}
+              className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                form.kind === v
+                  ? "bg-[#1c3d34] text-white border-[#1c3d34]"
+                  : "bg-white text-[#5a5a52] border-[#dadad2] hover:bg-[#fafaf7]"
+              }`}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field label={isIndividual ? "氏名 *" : "会社名 *"}>
+        <input className={inputCls} value={form.name} onChange={set("name")} placeholder={isIndividual ? "山田 太郎" : "株式会社 ○○"} />
+      </Field>
+      {!isIndividual && (
+        <Field label="担当者名">
+          <input className={inputCls} value={form.contact} onChange={set("contact")} placeholder="山田 太郎" />
+        </Field>
+      )}
+      <Field label="電話番号">
+        <input className={inputCls} value={form.phone} onChange={set("phone")} placeholder="03-1234-5678" />
+      </Field>
+      <Field label="メールアドレス">
+        <input className={inputCls} value={form.email} onChange={set("email")} placeholder="example@example.com" />
+      </Field>
+      <Field label={isIndividual ? "住所（配送先）" : "住所"}>
+        <input className={inputCls} value={form.address} onChange={set("address")} placeholder="東京都..." />
+      </Field>
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#dadad2] text-[#5a5a52]">
+          キャンセル
+        </button>
+        <button
+          onClick={() => form.name.trim() && onSave(form)}
+          className="px-4 py-2 text-sm rounded-lg bg-[#1c3d34] text-white font-medium disabled:opacity-40"
+          disabled={!form.name.trim()}
+        >
+          保存
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function ProductForm({ data, onSave, onClose }) {
+  const [form, setForm] = useState({
+    id: data.id ?? null,
+    name: data.name ?? "",
+    price: data.price ?? 0,
+    stock: data.stock ?? 0,
+    unit: data.unit ?? "個",
+    lowStock: data.lowStock ?? 5,
+  });
+  const set = (k, num) => (e) => setForm((f) => ({ ...f, [k]: num ? Number(e.target.value) : e.target.value }));
+
+  return (
+    <Modal title={data.id ? "商品を編集" : "商品を追加"} onClose={onClose}>
+      <Field label="商品名 *">
+        <input className={inputCls} value={form.name} onChange={set("name")} placeholder="商品名を入力" />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="単価（円）">
+          <input type="number" className={inputCls} value={form.price} onChange={set("price", true)} />
+        </Field>
+        <Field label="単位">
+          <input className={inputCls} value={form.unit} onChange={set("unit")} placeholder="個・台・箱など" />
+        </Field>
+        <Field label="現在の在庫数">
+          <input type="number" className={inputCls} value={form.stock} onChange={set("stock", true)} />
+        </Field>
+        <Field label="在庫アラート基準">
+          <input type="number" className={inputCls} value={form.lowStock} onChange={set("lowStock", true)} />
+        </Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#dadad2] text-[#5a5a52]">
+          キャンセル
+        </button>
+        <button
+          onClick={() => form.name.trim() && onSave(form)}
+          className="px-4 py-2 text-sm rounded-lg bg-[#1c3d34] text-white font-medium disabled:opacity-40"
+          disabled={!form.name.trim()}
+        >
+          保存
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DocForm({ data, customers, products, onSave, onClose }) {
+  const isInvoice = data.type === "invoice";
+  const [customerId, setCustomerId] = useState(data.customerId ?? "");
+  const [date, setDate] = useState(data.date ?? today());
+  const [dueDate, setDueDate] = useState(data.dueDate ?? "");
+  const [status, setStatus] = useState(data.status ?? (isInvoice ? "unpaid" : "draft"));
+  const [paymentMethod, setPaymentMethod] = useState(data.paymentMethod ?? "bank_transfer");
+  const [items, setItems] = useState(
+    data.items?.length ? data.items : [{ productId: products[0]?.id ?? "", qty: 1, price: products[0]?.price ?? 0 }]
+  );
+
+  const addItem = () =>
+    setItems((it) => [...it, { productId: products[0]?.id ?? "", qty: 1, price: products[0]?.price ?? 0 }]);
+  const removeItem = (i) => setItems((it) => it.filter((_, idx) => idx !== i));
+  const updateItem = (i, key, val) =>
+    setItems((it) =>
+      it.map((row, idx) => {
+        if (idx !== i) return row;
+        if (key === "productId") {
+          const prod = products.find((p) => p.id === val);
+          return { ...row, productId: val, price: prod?.price ?? 0 };
+        }
+        return { ...row, [key]: Number(val) };
+      })
+    );
+
+  const total = items.reduce((s, it) => s + it.qty * it.price, 0);
+
+  const statusOptions = isInvoice
+    ? [["unpaid", "未払い"], ["paid", "支払済み"]]
+    : [["draft", "ドラフト"], ["sent", "送付済み"]];
+
+  const canSave = customerId && items.length > 0 && items.every((it) => it.productId);
+
+  return (
+    <Modal title={`${isInvoice ? "請求書" : "見積書"}${data.id ? "を編集" : "を作成"}`} onClose={onClose} wide>
+      <div className="grid grid-cols-2 gap-3 mb-2">
+        <Field label="取引先 *">
+          <select className={inputCls} value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+            <option value="">選択してください</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="状態">
+          <select className={inputCls} value={status} onChange={(e) => setStatus(e.target.value)}>
+            {statusOptions.map(([v, l]) => (
+              <option key={v} value={v}>{l}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="発行日">
+          <input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+        </Field>
+        <Field label={isInvoice ? "支払期限" : "見積有効期限"}>
+          <input type="date" className={inputCls} value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        </Field>
+        <Field label="支払方法">
+          <select className={inputCls} value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+            {PAYMENT_METHODS.map(([v, l]) => (
+              <option key={v} value={v}>{l}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-[#6a6a62]">明細</span>
+          <button onClick={addItem} className="text-xs text-[#1c3d34] font-medium flex items-center gap-1 hover:underline">
+            <Plus size={13} /> 行を追加
+          </button>
+        </div>
+        <div className="border border-[#ececec] rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-[#fafaf7]">
+              <tr>
+                <Th>商品</Th>
+                <Th right>数量</Th>
+                <Th right>単価</Th>
+                <Th right>小計</Th>
+                <th className="w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, i) => (
+                <tr key={i} className="border-t border-[#f3f3ef]">
+                  <td className="px-3 py-2">
+                    <select
+                      className="w-full text-sm border border-[#dadad2] rounded-md px-2 py-1.5"
+                      value={it.productId}
+                      onChange={(e) => updateItem(i, "productId", e.target.value)}
+                    >
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      min={1}
+                      className="w-20 text-sm border border-[#dadad2] rounded-md px-2 py-1.5 text-right tabular-nums"
+                      value={it.qty}
+                      onChange={(e) => updateItem(i, "qty", e.target.value)}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      className="w-24 text-sm border border-[#dadad2] rounded-md px-2 py-1.5 text-right tabular-nums"
+                      value={it.price}
+                      onChange={(e) => updateItem(i, "price", e.target.value)}
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{yen(it.qty * it.price)}</td>
+                  <td className="px-1 py-2 text-center">
+                    <button onClick={() => removeItem(i)} className="text-[#aaa9a0] hover:text-[#c0524a]">
+                      <X size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex justify-end mt-3 text-sm">
+          <div className="flex items-center gap-4">
+            <span className="text-[#6a6a62]">合計金額</span>
+            <span className="text-lg font-semibold tabular-nums">{yen(total)}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 mt-6">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#dadad2] text-[#5a5a52]">
+          キャンセル
+        </button>
+        <button
+          onClick={() =>
+            canSave &&
+            onSave({ ...data, customerId, date, dueDate, status, paymentMethod, items })
+          }
+          className="px-4 py-2 text-sm rounded-lg bg-[#1c3d34] text-white font-medium disabled:opacity-40"
+          disabled={!canSave}
+        >
+          保存
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function ReportsPage({ invoices, customerById, docTotal, products }) {
+  const paidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "paid");
+
+  const byCustomer = useMemo(() => {
+    const map = {};
+    paidInvoices.forEach((d) => {
+      const name = customerById(d.customerId)?.name ?? "不明";
+      map[name] = (map[name] ?? 0) + docTotal(d);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [paidInvoices]);
+
+  const byProduct = useMemo(() => {
+    const map = {};
+    paidInvoices.forEach((d) => {
+      d.items.forEach((it) => {
+        const prod = products.find((p) => p.id === it.productId);
+        const name = prod?.name ?? "不明";
+        map[name] = (map[name] ?? 0) + it.qty * it.price;
+      });
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [paidInvoices]);
+
+  const maxCustomer = Math.max(1, ...byCustomer.map(([, v]) => v));
+  const maxProduct = Math.max(1, ...byProduct.map(([, v]) => v));
+  const grandTotal = byCustomer.reduce((s, [, v]) => s + v, 0);
+
+  return (
+    <div>
+      <h1 className="text-xl font-semibold mb-1">売上レポート</h1>
+      <p className="text-sm text-[#8a8a82] mb-6">支払済み請求書をもとに集計（{paidInvoices.length}件）</p>
+
+      <div className="bg-white rounded-xl border border-[#e3e3dd] p-5 mb-6">
+        <div className="text-xs font-medium text-[#8a8a82] mb-1">売上合計</div>
+        <div className="text-3xl font-semibold tabular-nums">{yen(grandTotal)}</div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl border border-[#e3e3dd] p-5">
+          <h2 className="font-semibold text-sm mb-4">取引先別 売上</h2>
+          {byCustomer.length === 0 ? (
+            <EmptyState text="データがありません。" />
+          ) : (
+            <div className="flex flex-col gap-3">
+              {byCustomer.map(([name, val]) => (
+                <div key={name}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span>{name}</span>
+                    <span className="font-medium tabular-nums">{yen(val)}</span>
+                  </div>
+                  <div className="h-2 bg-[#f0f0ec] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#1c3d34] rounded-full"
+                      style={{ width: `${(val / maxCustomer) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-xl border border-[#e3e3dd] p-5">
+          <h2 className="font-semibold text-sm mb-4">商品別 売上</h2>
+          {byProduct.length === 0 ? (
+            <EmptyState text="データがありません。" />
+          ) : (
+            <div className="flex flex-col gap-3">
+              {byProduct.map(([name, val]) => (
+                <div key={name}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span>{name}</span>
+                    <span className="font-medium tabular-nums">{yen(val)}</span>
+                  </div>
+                  <div className="h-2 bg-[#f0f0ec] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#d9a05b] rounded-full"
+                      style={{ width: `${(val / maxProduct) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReceiptModal({ doc, customer, docTotal, onClose }) {
+  const total = docTotal(doc);
+  const receiptNo = doc.id.replace("INV", "REC");
+
+  return (
+    <Modal title="領収書" onClose={onClose}>
+      <div id="receipt-print-area" className="border border-[#dadad2] rounded-lg p-6 mb-5 bg-white">
+        <div className="flex justify-between items-start mb-6">
+          <h2 className="text-lg font-bold tracking-wide">領　収　書</h2>
+          <span className="text-xs text-[#8a8a82] font-mono">{receiptNo}</span>
+        </div>
+
+        <div className="mb-6">
+          <div className="text-lg font-semibold border-b border-[#23241f] inline-block pb-1 min-w-[200px]">
+            {customer?.name ?? "—"} {honorific(customer)}
+          </div>
+        </div>
+
+        <div className="mb-6">
+          <div className="text-2xl font-bold tabular-nums">{yen(total)}</div>
+          <div className="text-xs text-[#8a8a82] mt-1">（税込）</div>
+        </div>
+
+        <div className="text-sm text-[#5a5a52] mb-4">
+          上記正に領収いたしました。
+        </div>
+
+        <table className="w-full text-sm mb-4">
+          <tbody>
+            <tr className="border-t border-[#ececec]">
+              <td className="py-2 text-[#8a8a82] w-28">発行日</td>
+              <td className="py-2">{doc.date}</td>
+            </tr>
+            <tr className="border-t border-[#ececec]">
+              <td className="py-2 text-[#8a8a82]">支払方法</td>
+              <td className="py-2">{paymentLabel(doc.paymentMethod)}</td>
+            </tr>
+            <tr className="border-t border-[#ececec]">
+              <td className="py-2 text-[#8a8a82]">対象請求書</td>
+              <td className="py-2 font-mono text-xs">{doc.id}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div className="text-right text-sm text-[#5a5a52] mt-8">
+          発行者：販売管理株式会社
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#dadad2] text-[#5a5a52]">
+          閉じる
+        </button>
+        <button
+          onClick={() => window.print()}
+          className="px-4 py-2 text-sm rounded-lg bg-[#1c3d34] text-white font-medium flex items-center gap-1.5"
+        >
+          <Printer size={15} /> 印刷する
+        </button>
+      </div>
+    </Modal>
+  );
+}
