@@ -36,6 +36,24 @@ const PAYMENT_METHODS = [
 const paymentLabel = (v) => PAYMENT_METHODS.find(([k]) => k === v)?.[1] ?? "—";
 
 const yen = (n) => "¥" + Math.round(n).toLocaleString("ja-JP");
+const TAX_RATE = 0.1;
+const docSubtotal = (doc) => doc.items.reduce((sum, it) => sum + it.qty * it.price, 0);
+const docTax = (doc) => Math.round(docSubtotal(doc) * TAX_RATE);
+const docTotal = (doc) => docSubtotal(doc) + docTax(doc);
+// ---------- 自社情報（見積書・請求書・領収書に表示） ----------
+
+const COMPANY = {
+  name: "後畳店",
+  representative: "後 明広",
+  phone: "0739-22-8302",
+  fax: "0739-25-2788",
+  email: "tatami@ushirotatami.com",
+  addressMain: "本店：和歌山県田辺市高雄3-11-33",
+  addressShowroom: "ショールーム：和歌山県田辺市新庄町1800-108",
+  license: "一級技能士 内装仕上業 和歌山県知事許可第17097号",
+  bank: "紀陽銀行 田辺支店 普通1454963　口座名：後明広",
+  invoiceNumber: "T6-8104-4860-3885",
+};
 const today = () => new Date().toISOString().slice(0, 10);
 
 // ---------- データベース行 <-> アプリ内データ 変換 ----------
@@ -47,6 +65,7 @@ const customerFromRow = (row) => ({
   contact: row.contact ?? "",
   phone: row.phone ?? "",
   email: row.email ?? "",
+  postalCode: row.postal_code ?? "",
   address: row.address ?? "",
 });
 const customerToRow = (c) => ({
@@ -55,6 +74,7 @@ const customerToRow = (c) => ({
   contact: c.contact ?? "",
   phone: c.phone ?? "",
   email: c.email ?? "",
+  postal_code: c.postalCode ?? "",
   address: c.address ?? "",
 });
 
@@ -191,8 +211,10 @@ export default function SalesApp() {
   const [productModal, setProductModal] = useState(null);
   const [docModal, setDocModal] = useState(null);
   const [receiptDoc, setReceiptDoc] = useState(null); // 領収書表示中の請求書
+  const [printDoc, setPrintDoc] = useState(null); // 印刷表示中の見積書・請求書
   const [search, setSearch] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [historyCustomer, setHistoryCustomer] = useState(null);
 
   // ---- 初回読み込み：Supabaseから全データを取得 ----
   useEffect(() => {
@@ -211,11 +233,10 @@ export default function SalesApp() {
     };
     loadAll();
   }, []);
-
   const customerById = (id) => customers.find((c) => c.id === id);
   const productById = (id) => products.find((p) => p.id === id);
 
-  const docTotal = (doc) => doc.items.reduce((sum, it) => sum + it.qty * it.price, 0);
+  
 
   const stats = useMemo(() => {
     const paidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "paid");
@@ -313,7 +334,11 @@ export default function SalesApp() {
       .select()
       .single();
     if (error) { alert("変換に失敗しました: " + error.message); return; }
-    setInvoices((ds) => [...ds, docFromRow(inserted)]);
+
+    const { error: deleteError } = await supabase.from("documents").delete().eq("id", estimate.id);
+    if (deleteError) { alert("元の見積書の削除に失敗しました: " + deleteError.message); return; }
+
+    setInvoices((ds) => [...ds.filter((d) => d.id !== estimate.id), docFromRow(inserted)]);
     setPage("invoices");
   };
 
@@ -477,6 +502,7 @@ export default function SalesApp() {
                 rows={filteredCustomers}
                 onEdit={(c) => setCustomerModal(c)}
                 onDelete={deleteCustomer}
+                onHistory={(c) => setHistoryCustomer(c)}
               />
             </ListPage>
           )}
@@ -517,6 +543,8 @@ export default function SalesApp() {
                 onDelete={deleteDoc}
                 onConvert={page === "estimates" ? convertToInvoice : null}
                 onReceipt={page === "invoices" ? (d) => setReceiptDoc(d) : null}
+                
+              onPrint={(d) => setPrintDoc(d)}
               />
             </ListPage>
           )}
@@ -529,6 +557,14 @@ export default function SalesApp() {
 
       {customerModal && (
         <CustomerForm data={customerModal} onSave={saveCustomer} onClose={() => setCustomerModal(null)} />
+      )}
+      {historyCustomer && (
+        <CustomerHistoryModal
+          customer={historyCustomer}
+          docs={invoices.filter((d) => d.customerId === historyCustomer.id)}
+          docTotal={docTotal}
+          onClose={() => setHistoryCustomer(null)}
+        />
       )}
       {productModal && (
         <ProductForm data={productModal} onSave={saveProduct} onClose={() => setProductModal(null)} />
@@ -550,6 +586,18 @@ export default function SalesApp() {
           onClose={() => setReceiptDoc(null)}
         />
       )}
+      {printDoc && (
+        <PrintDocModal
+          doc={printDoc}
+          customer={customerById(printDoc.customerId)}
+          productById={productById}
+          docTotal={docTotal}
+          onClose={() => setPrintDoc(null)}
+        />
+      )}
+
+
+
     </div>
   );
 }
@@ -683,7 +731,7 @@ function Th({ children, right }) {
 
 // ---------- 取引先テーブル ----------
 
-function CustomerTable({ rows, onEdit, onDelete }) {
+function CustomerTable({ rows, onEdit, onDelete, onHistory }) {
   if (rows.length === 0) return <EmptyState text="取引先が見つかりません。" />;
   return (
     <table className="w-full min-w-[640px] text-sm">
@@ -710,12 +758,86 @@ function CustomerTable({ rows, onEdit, onDelete }) {
             <td className="px-4 py-3 text-[#5a5a52]">{c.phone}</td>
             <td className="px-4 py-3 text-[#5a5a52]">{c.email}</td>
             <td className="px-4 py-3 text-right">
-              <RowActions onEdit={() => onEdit(c)} onDelete={() => onDelete(c.id)} />
+              <div className="flex justify-end gap-1.5">
+                <button
+                  onClick={() => onHistory(c)}
+                  className="text-xs px-2.5 py-1 rounded-md border border-[#1c3d34]/30 text-[#1c3d34] font-medium hover:bg-[#1c3d34]/5"
+                >
+                  履歴
+                </button>
+                <RowActions onEdit={() => onEdit(c)} onDelete={() => onDelete(c.id)} />
+              </div>
             </td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+// ---------- 取引先の履歴モーダル ----------
+
+function CustomerHistoryModal({ customer, docs, docTotal, onClose }) {
+  const sorted = [...docs].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const totalPaid = docs
+    .filter((d) => d.type === "invoice" && d.status === "paid")
+    .reduce((s, d) => s + docTotal(d), 0);
+  const totalUnpaid = docs
+    .filter((d) => d.type === "invoice" && d.status === "unpaid")
+    .reduce((s, d) => s + docTotal(d), 0);
+
+  return (
+    <Modal title={`${customer.name} の履歴`} onClose={onClose} wide>
+      <div className="grid grid-cols-2 gap-3 mb-5">
+        <div className="bg-[#fafaf7] rounded-lg p-4">
+          <div className="text-xs text-[#8a8a82] mb-1">支払済み合計</div>
+          <div className="text-xl font-semibold tabular-nums">{yen(totalPaid)}</div>
+        </div>
+        <div className="bg-[#fafaf7] rounded-lg p-4">
+          <div className="text-xs text-[#8a8a82] mb-1">未払い合計</div>
+          <div className="text-xl font-semibold tabular-nums text-[#c0524a]">{yen(totalUnpaid)}</div>
+        </div>
+      </div>
+
+      {sorted.length === 0 ? (
+        <EmptyState text="この取引先の見積書・請求書はまだありません。" />
+      ) : (
+        <div className="border border-[#ececec] rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-[#fafaf7]">
+              <tr>
+                <Th>番号</Th>
+                <Th>種別</Th>
+                <Th>発行日</Th>
+                <Th right>金額</Th>
+                <Th>状態</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((d) => (
+                <tr key={d.id} className="border-t border-[#f3f3ef]">
+                  <td className="px-4 py-2.5 font-mono text-xs text-[#5a5a52]">{d.docNumber}</td>
+                  <td className="px-4 py-2.5">{d.type === "invoice" ? "請求書" : "見積書"}</td>
+                  <td className="px-4 py-2.5 text-[#5a5a52]">{d.date}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-medium">{yen(docTotal(d))}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[d.status]}`}>
+                      {STATUS_LABEL[d.status]}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="flex justify-end mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#dadad2] text-[#5a5a52]">
+          閉じる
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -762,10 +884,10 @@ function ProductTable({ rows, onEdit, onDelete }) {
 
 // ---------- 見積/請求テーブル ----------
 
-function DocTable({ rows, customerById, docTotal, onEdit, onDelete, onConvert, onReceipt }) {
+function DocTable({ rows, customerById, docTotal, onEdit, onDelete, onConvert, onReceipt, onPrint }) {
   if (rows.length === 0) return <EmptyState text="該当するデータがありません。" />;
   return (
-    <table className="w-full min-w-[760px] text-sm">
+    <table className="w-full min-w-[820px] text-sm">
       <thead className="bg-[#fafaf7] border-b border-[#ececec]">
         <tr>
           <Th>番号</Th>
@@ -794,6 +916,14 @@ function DocTable({ rows, customerById, docTotal, onEdit, onDelete, onConvert, o
               </td>
               <td className="px-4 py-3 text-right">
                 <div className="flex justify-end gap-1.5">
+                  {onPrint && (
+                    <button
+                      onClick={() => onPrint(d)}
+                      className="text-xs px-2.5 py-1 rounded-md border border-[#1c3d34]/30 text-[#1c3d34] font-medium hover:bg-[#1c3d34]/5 flex items-center gap-1"
+                    >
+                      <Printer size={12} /> 印刷
+                    </button>
+                  )}
                   {onConvert && (
                     <button
                       onClick={() => onConvert(d)}
@@ -853,6 +983,7 @@ function CustomerForm({ data, onSave, onClose }) {
     contact: data.contact ?? "",
     phone: data.phone ?? "",
     email: data.email ?? "",
+    postalCode: data.postalCode ?? "",
     address: data.address ?? "",
   });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -891,6 +1022,9 @@ function CustomerForm({ data, onSave, onClose }) {
       </Field>
       <Field label="メールアドレス">
         <input className={inputCls} value={form.email} onChange={set("email")} placeholder="example@example.com" />
+      </Field>
+      <Field label="郵便番号">
+        <input className={inputCls} value={form.postalCode} onChange={set("postalCode")} placeholder="123-4567" />
       </Field>
       <Field label={isIndividual ? "住所（配送先）" : "住所"}>
         <input className={inputCls} value={form.address} onChange={set("address")} placeholder="東京都..." />
@@ -968,31 +1102,43 @@ function DocForm({ data, customers, products, onSave, onClose }) {
   const [status, setStatus] = useState(data.status ?? (isInvoice ? "unpaid" : "draft"));
   const [paymentMethod, setPaymentMethod] = useState(data.paymentMethod ?? "bank_transfer");
   const [items, setItems] = useState(
-    data.items?.length ? data.items : [{ productId: products[0]?.id ?? "", qty: 1, price: products[0]?.price ?? 0 }]
+    data.items?.length
+      ? data.items
+      : [{ productId: products[0]?.id ?? "", name: products[0]?.name ?? "", qty: 1, price: products[0]?.price ?? 0 }]
   );
 
   const addItem = () =>
-    setItems((it) => [...it, { productId: products[0]?.id ?? "", qty: 1, price: products[0]?.price ?? 0 }]);
+    setItems((it) => [
+      ...it,
+      { productId: products[0]?.id ?? "", name: products[0]?.name ?? "", qty: 1, price: products[0]?.price ?? 0 },
+    ]);
   const removeItem = (i) => setItems((it) => it.filter((_, idx) => idx !== i));
   const updateItem = (i, key, val) =>
     setItems((it) =>
       it.map((row, idx) => {
         if (idx !== i) return row;
         if (key === "productId") {
+          if (val === "") {
+            return { ...row, productId: "", name: "" };
+          }
           const prod = products.find((p) => p.id === val);
-          return { ...row, productId: val, price: prod?.price ?? 0 };
+          return { ...row, productId: val, name: prod?.name ?? "", price: prod?.price ?? row.price };
+        }
+        if (key === "name") {
+          return { ...row, name: val };
         }
         return { ...row, [key]: Number(val) };
       })
     );
 
-  const total = items.reduce((s, it) => s + it.qty * it.price, 0);
-
+  const subtotal = items.reduce((s, it) => s + it.qty * it.price, 0);
+const tax = Math.round(subtotal * TAX_RATE);
+const total = subtotal + tax;
   const statusOptions = isInvoice
     ? [["unpaid", "未払い"], ["paid", "支払済み"]]
     : [["draft", "ドラフト"], ["sent", "送付済み"]];
 
-  const canSave = customerId && items.length > 0 && items.every((it) => it.productId);
+  const canSave = customerId && items.length > 0 && items.every((it) => it.productId || it.name?.trim());
 
   return (
     <Modal title={`${isInvoice ? "請求書" : "見積書"}${data.id ? "を編集" : "を作成"}`} onClose={onClose} wide>
@@ -1059,14 +1205,24 @@ function DocForm({ data, customers, products, onSave, onClose }) {
                 <tr key={i} className="border-t border-[#f3f3ef]">
                   <td className="px-3 py-2">
                     <select
-                      className="w-full text-sm border border-[#dadad2] rounded-md px-2 py-1.5"
+                      className="w-full text-sm border border-[#dadad2] rounded-md px-2 py-1.5 mb-1"
                       value={it.productId}
                       onChange={(e) => updateItem(i, "productId", e.target.value)}
                     >
+                      <option value="">— 商品名を直接入力 —</option>
                       {products.map((p) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
+                    {!it.productId && (
+                      <input
+                        type="text"
+                        className="w-full text-sm border border-[#dadad2] rounded-md px-2 py-1.5"
+                        placeholder="商品名を入力"
+                        value={it.name}
+                        onChange={(e) => updateItem(i, "name", e.target.value)}
+                      />
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <input
@@ -1096,12 +1252,24 @@ function DocForm({ data, customers, products, onSave, onClose }) {
             </tbody>
           </table>
         </div>
-        <div className="flex justify-end mt-3 text-sm">
-          <div className="flex items-center gap-4">
-            <span className="text-[#6a6a62]">合計金額</span>
-            <span className="text-lg font-semibold tabular-nums">{yen(total)}</span>
-          </div>
-        </div>
+        <div className="flex justify-end mt-3">
+  <table className="text-sm w-56">
+    <tbody>
+      <tr>
+        <td className="py-1 text-[#8a8a82]">小計</td>
+        <td className="py-1 text-right tabular-nums">{yen(subtotal)}</td>
+      </tr>
+      <tr>
+        <td className="py-1 text-[#8a8a82]">消費税（10%）</td>
+        <td className="py-1 text-right tabular-nums">{yen(tax)}</td>
+      </tr>
+      <tr className="border-t border-[#23241f]">
+        <td className="py-1.5 font-semibold">合計</td>
+        <td className="py-1.5 text-right tabular-nums font-semibold">{yen(total)}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
       </div>
 
       <div className="flex justify-end gap-2 mt-6">
@@ -1166,7 +1334,7 @@ function ReportsPage({ invoices, customerById, docTotal, products }) {
     paidInvoices.forEach((d) => {
       d.items.forEach((it) => {
         const prod = products.find((p) => p.id === it.productId);
-        const name = prod?.name ?? "不明";
+        const name = it.name || prod?.name || "不明";
         map[name] = (map[name] ?? 0) + it.qty * it.price;
       });
     });
@@ -1302,21 +1470,35 @@ function ReceiptModal({ doc, customer, docTotal, onClose }) {
   return (
     <Modal title="領収書" onClose={onClose}>
       <div id="receipt-print-area" className="border border-[#dadad2] rounded-lg p-6 mb-5 bg-white">
-        <div className="flex justify-between items-start mb-6">
-          <h2 className="text-lg font-bold tracking-wide">領　収　書</h2>
-          <span className="text-xs text-[#8a8a82] font-mono">{receiptNo}</span>
-        </div>
-
-        <div className="mb-6">
-          <div className="text-lg font-semibold border-b border-[#23241f] inline-block pb-1 min-w-[200px]">
-            {customer?.name ?? "—"} {honorific(customer)}
+        <div className="flex justify-between items-start mb-5 pb-5 border-b-2 border-[#1c3d34]">
+          <div>
+            <h2 className="text-lg font-bold tracking-[0.25em] text-[#23241f]">領　収　書</h2>
+            <div className="text-[10px] text-[#8a8a82] font-mono mt-1.5">No. {receiptNo}</div>
+          </div>
+          <div className="text-right text-[10px] text-[#5a5a52] leading-snug">
+            <div className="flex items-center justify-end gap-1.5 mb-1.5">
+              <img src="/logo.png" alt="ロゴ" className="w-8 h-8 object-contain" />
+              <span className="text-sm font-bold text-[#23241f]">{COMPANY.name}</span>
+            </div>
+            <div>代表：{COMPANY.representative}　｜　{COMPANY.license}</div>
+            <div>{COMPANY.addressMain}</div>
+            <div>{COMPANY.addressShowroom}</div>
+            <div>TEL：{COMPANY.phone}　FAX：{COMPANY.fax}　{COMPANY.email}</div>
+            <div>登録番号：{COMPANY.invoiceNumber}</div>
           </div>
         </div>
+<div className="mb-6">
+          <div className="text-base font-semibold border-b border-[#23241f] inline-block pb-1 min-w-[200px]">
+            {customer?.name ?? "—"} {honorific(customer)}
+          </div>
+          {customer?.address && <div className="text-xs text-[#5a5a52] mt-1">{customer.address}</div>}
+        </div>
+        
 
         <div className="mb-6">
-          <div className="text-2xl font-bold tabular-nums">{yen(total)}</div>
-          <div className="text-xs text-[#8a8a82] mt-1">（税込）</div>
-        </div>
+  <div className="text-2xl font-bold tabular-nums">{yen(total)}</div>
+  <div className="text-xs text-[#8a8a82] mt-1">（税込・うち消費税 {yen(docTax(doc))}）</div>
+</div>
 
         <div className="text-sm text-[#5a5a52] mb-4">
           上記正に領収いたしました。
@@ -1339,9 +1521,139 @@ function ReceiptModal({ doc, customer, docTotal, onClose }) {
           </tbody>
         </table>
 
-        <div className="text-right text-sm text-[#5a5a52] mt-8">
-          発行者：販売管理株式会社
+        
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#dadad2] text-[#5a5a52]">
+          閉じる
+        </button>
+        <button
+          onClick={() => window.print()}
+          className="px-4 py-2 text-sm rounded-lg bg-[#1c3d34] text-white font-medium flex items-center gap-1.5"
+        >
+          <Printer size={15} /> 印刷する
+        </button>
+      </div>
+    </Modal>
+  );
+}
+// ---------- 見積書・請求書 印刷モーダル ----------
+
+function PrintDocModal({ doc, customer, productById, docTotal, onClose }) {
+  const isInvoice = doc.type === "invoice";
+  const taxExcluded = docSubtotal(doc);
+  const tax = docTax(doc);
+  const total = docTotal(doc);
+
+  return (
+    <Modal title={isInvoice ? "請求書を印刷" : "見積書を印刷"} onClose={onClose} wide>
+      <div id="doc-print-area" className="border border-[#dadad2] rounded-lg p-6 md:p-8 mb-5 bg-white">
+        <div className="flex justify-between items-start pb-5 mb-2 border-b-2 border-[#1c3d34]">
+          <div>
+            <h2 className="text-xl font-bold tracking-[0.25em] text-[#23241f]">
+              {isInvoice ? "請　求　書" : "見　積　書"}
+            </h2>
+            <div className="text-[10px] text-[#8a8a82] font-mono mt-1.5">No. {doc.docNumber}</div>
+          </div>
+          <div className="text-right text-[10px] text-[#5a5a52] leading-snug">
+            <div className="flex items-center justify-end gap-1.5 mb-1.5">
+              <img src="/logo.png" alt="ロゴ" className="w-8 h-8 object-contain" />
+              <span className="text-sm font-bold text-[#23241f]">{COMPANY.name}</span>
+            </div>
+            <div>代表：{COMPANY.representative}　｜　{COMPANY.license}</div>
+            <div>{COMPANY.addressMain}</div>
+            <div>{COMPANY.addressShowroom}</div>
+            <div>TEL：{COMPANY.phone}　FAX：{COMPANY.fax}　{COMPANY.email}</div>
+            <div>登録番号：{COMPANY.invoiceNumber}</div>
+            {isInvoice && <div>お振込先：{COMPANY.bank}</div>}
+          </div>
         </div>
+
+        <div className="flex justify-between items-start mb-8">
+          <div>
+            <div className="font-bold text-lg mb-1">{customer?.name} 様</div>
+            {customer?.address && <div className="text-sm text-[#5a5a52]">{customer.address}</div>}
+            {customer?.contact && <div className="text-sm text-[#5a5a52]">ご担当：{customer.contact} 様</div>}
+            {customer?.phone && <div className="text-sm text-[#5a5a52]">TEL：{customer.phone}</div>}
+          </div>
+          <div className="text-right">
+            <table className="w-full text-sm ml-auto">
+              <tbody>
+                <tr>
+                  <td className="py-1 text-[#8a8a82] pr-4">発行日</td>
+                  <td className="py-1 text-right">{doc.date}</td>
+                </tr>
+                <tr>
+                  <td className="py-1 text-[#8a8a82] pr-4">{isInvoice ? "支払期限" : "見積有効期限"}</td>
+                  <td className="py-1 text-right">{doc.dueDate || "—"}</td>
+                </tr>
+                {isInvoice && (
+                  <tr>
+                    <td className="py-1 text-[#8a8a82] pr-4">支払方法</td>
+                    <td className="py-1 text-right">{paymentLabel(doc.paymentMethod)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="mb-6">
+          <div className="text-sm text-[#5a5a52] mb-1">
+            {isInvoice ? "下記の通りご請求申し上げます。" : "下記の通りお見積りいたします。"}
+          </div>
+          <div className="text-3xl font-bold tabular-nums">{yen(total)}</div>
+          <div className="text-xs text-[#8a8a82] mt-1">（税込・消費税{Math.round(TAX_RATE * 100)}%）</div>
+        </div>
+
+        <div className="border border-[#ececec] rounded-lg overflow-hidden mb-6">
+          <table className="w-full text-sm">
+            <thead className="bg-[#fafaf7]">
+              <tr>
+                <Th>品目</Th>
+                <Th right>数量</Th>
+                <Th right>単価</Th>
+                <Th right>金額</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {doc.items.map((it, i) => {
+                const prod = productById(it.productId);
+                const itemName = it.name || prod?.name || "—";
+                return (
+                  <tr key={i} className="border-t border-[#f3f3ef]">
+                    <td className="px-4 py-2.5">{itemName}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{it.qty}{prod?.unit ?? ""}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{yen(it.price)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums font-medium">{yen(it.qty * it.price)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-end mb-8">
+          <table className="text-sm w-56">
+            <tbody>
+              <tr>
+                <td className="py-1 text-[#8a8a82]">小計</td>
+                <td className="py-1 text-right tabular-nums">{yen(taxExcluded)}</td>
+              </tr>
+              <tr>
+                <td className="py-1 text-[#8a8a82]">消費税</td>
+                <td className="py-1 text-right tabular-nums">{yen(tax)}</td>
+              </tr>
+              <tr className="border-t border-[#23241f]">
+                <td className="py-1.5 font-semibold">合計</td>
+                <td className="py-1.5 text-right tabular-nums font-semibold">{yen(total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        
       </div>
 
       <div className="flex justify-end gap-2">

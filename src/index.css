@@ -1,1 +1,25 @@
 @import "tailwindcss";
+
+/* 印刷時は、見積書・請求書・領収書の内容だけを表示し、
+   画面の他の部分（ボタンやタイトルなど）は隠す */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #receipt-print-area,
+  #receipt-print-area *,
+  #doc-print-area,
+  #doc-print-area * {
+    visibility: visible;
+  }
+  #receipt-print-area,
+  #doc-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none !important;
+    margin: 0 !important;
+    padding: 16px !important;
+  }
+}
