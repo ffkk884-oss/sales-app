@@ -1126,7 +1126,31 @@ function DocForm({ data, customers, products, onSave, onClose }) {
 // ---------- ページ: 売上レポート ----------
 
 function ReportsPage({ invoices, customerById, docTotal, products }) {
-  const paidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "paid");
+  const [selectedMonth, setSelectedMonth] = useState("all"); // "all" または "2026-06" 形式
+
+  const allPaidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "paid");
+
+  // 月別の売上集計（グラフ用、常に全期間）
+  const byMonth = useMemo(() => {
+    const map = {};
+    allPaidInvoices.forEach((d) => {
+      const month = d.date?.slice(0, 7); // "YYYY-MM"
+      if (!month) return;
+      map[month] = (map[month] ?? 0) + docTotal(d);
+    });
+    return Object.entries(map).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  }, [allPaidInvoices]);
+
+  const monthLabel = (m) => {
+    const [y, mo] = m.split("-");
+    return `${y}年${Number(mo)}月`;
+  };
+
+  // 選択中の月で絞り込んだ請求書（取引先別・商品別の集計に使う）
+  const paidInvoices = useMemo(() => {
+    if (selectedMonth === "all") return allPaidInvoices;
+    return allPaidInvoices.filter((d) => d.date?.slice(0, 7) === selectedMonth);
+  }, [allPaidInvoices, selectedMonth]);
 
   const byCustomer = useMemo(() => {
     const map = {};
@@ -1151,16 +1175,69 @@ function ReportsPage({ invoices, customerById, docTotal, products }) {
 
   const maxCustomer = Math.max(1, ...byCustomer.map(([, v]) => v));
   const maxProduct = Math.max(1, ...byProduct.map(([, v]) => v));
+  const maxMonth = Math.max(1, ...byMonth.map(([, v]) => v));
   const grandTotal = byCustomer.reduce((s, [, v]) => s + v, 0);
 
   return (
     <div>
-      <h1 className="text-xl font-semibold mb-1">売上レポート</h1>
-      <p className="text-sm text-[#8a8a82] mb-6">支払済み請求書をもとに集計（{paidInvoices.length}件）</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-1">
+        <h1 className="text-xl font-semibold">売上レポート</h1>
+        <select
+          className="px-3 py-2 rounded-lg border border-[#dadad2] text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1c3d34]/30"
+          value={selectedMonth}
+          onChange={(e) => setSelectedMonth(e.target.value)}
+        >
+          <option value="all">すべての期間</option>
+          {[...byMonth].reverse().map(([m]) => (
+            <option key={m} value={m}>{monthLabel(m)}</option>
+          ))}
+        </select>
+      </div>
+      <p className="text-sm text-[#8a8a82] mb-6">
+        支払済み請求書をもとに集計（{paidInvoices.length}件）
+        {selectedMonth !== "all" && ` ・ ${monthLabel(selectedMonth)}で絞り込み中`}
+      </p>
 
       <div className="bg-white rounded-xl border border-[#e3e3dd] p-5 mb-6">
-        <div className="text-xs font-medium text-[#8a8a82] mb-1">売上合計</div>
+        <div className="text-xs font-medium text-[#8a8a82] mb-1">
+          {selectedMonth === "all" ? "売上合計" : `${monthLabel(selectedMonth)}の売上合計`}
+        </div>
         <div className="text-3xl font-semibold tabular-nums">{yen(grandTotal)}</div>
+      </div>
+
+      {/* 月別売上グラフ */}
+      <div className="bg-white rounded-xl border border-[#e3e3dd] p-5 mb-6">
+        <h2 className="font-semibold text-sm mb-4">月別 売上</h2>
+        {byMonth.length === 0 ? (
+          <EmptyState text="データがありません。" />
+        ) : (
+          <div className="flex items-end gap-2 md:gap-4 overflow-x-auto pb-1" style={{ minHeight: "140px" }}>
+            {byMonth.map(([m, val]) => (
+              <button
+                key={m}
+                onClick={() => setSelectedMonth(selectedMonth === m ? "all" : m)}
+                className="flex flex-col items-center gap-1.5 shrink-0 group"
+                style={{ width: "56px" }}
+              >
+                <span className="text-[11px] text-[#6a6a62] font-medium tabular-nums">
+                  {yen(val).replace("¥", "")}
+                </span>
+                <div
+                  className={`w-9 rounded-t-md transition-colors ${
+                    selectedMonth === m ? "bg-[#1c3d34]" : "bg-[#d9a05b] group-hover:bg-[#1c3d34]"
+                  }`}
+                  style={{ height: `${Math.max(8, (val / maxMonth) * 100)}px` }}
+                />
+                <span className={`text-[11px] ${selectedMonth === m ? "text-[#1c3d34] font-semibold" : "text-[#8a8a82]"}`}>
+                  {m.slice(2).replace("-", "/")}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        {byMonth.length > 0 && (
+          <p className="text-[11px] text-[#aaa9a0] mt-2">バーをクリックすると、その月で絞り込めます。</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
