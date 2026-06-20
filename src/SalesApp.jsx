@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -16,15 +16,13 @@ import {
   ChevronRight,
   Receipt,
   Printer,
+  Menu,
+  LogOut,
+  Loader2,
 } from "lucide-react";
+import { supabase } from "./supabaseClient";
 
-const initialCustomers = [
-  { id: "c1", kind: "company", name: "株式会社 山田商事", contact: "山田 太郎", phone: "06-1234-5678", email: "yamada@example.com", address: "大阪府大阪市北区1-2-3" },
-  { id: "c2", kind: "company", name: "鈴木工業株式会社", contact: "鈴木 一郎", phone: "03-2345-6789", email: "suzuki@example.com", address: "東京都千代田区4-5-6" },
-  { id: "c3", kind: "individual", name: "田中 花子", contact: "", phone: "075-345-6789", email: "tanaka@example.com", address: "京都府京都市中京区7-8-9" },
-  { id: "c4", kind: "individual", name: "佐藤 健一", contact: "", phone: "090-1111-2222", email: "sato.kenichi@example.com", address: "兵庫県神戸市灘区2-3-4" },
-];
-
+// 個人/法人の区分に応じた敬称
 const honorific = (customer) => (customer?.kind === "individual" ? "様" : "御中");
 const kindLabel = (kind) => (kind === "individual" ? "個人" : "法人");
 
@@ -37,58 +35,68 @@ const PAYMENT_METHODS = [
 ];
 const paymentLabel = (v) => PAYMENT_METHODS.find(([k]) => k === v)?.[1] ?? "—";
 
-const initialProducts = [
-  { id: "p1", name: "事務用デスク A型", price: 18000, stock: 12, unit: "台", lowStock: 5 },
-  { id: "p2", name: "オフィスチェア B型", price: 9500, stock: 3, unit: "台", lowStock: 5 },
-  { id: "p3", name: "ノートPCスタンド", price: 2400, stock: 40, unit: "個", lowStock: 10 },
-  { id: "p4", name: "LED デスクライト", price: 3200, stock: 8, unit: "個", lowStock: 10 },
-];
-
-const initialInvoices = [
-  {
-    id: "INV-0001",
-    type: "invoice",
-    customerId: "c1",
-    date: "2026-06-01",
-    dueDate: "2026-06-30",
-    status: "paid",
-    paymentMethod: "bank_transfer",
-    items: [{ productId: "p1", qty: 2, price: 18000 }, { productId: "p3", qty: 4, price: 2400 }],
-  },
-  {
-    id: "INV-0002",
-    type: "invoice",
-    customerId: "c2",
-    date: "2026-06-10",
-    dueDate: "2026-07-10",
-    status: "unpaid",
-    paymentMethod: "bank_transfer",
-    items: [{ productId: "p2", qty: 5, price: 9500 }],
-  },
-  {
-    id: "EST-0001",
-    type: "estimate",
-    customerId: "c3",
-    date: "2026-06-15",
-    dueDate: "2026-06-30",
-    status: "draft",
-    paymentMethod: "cash",
-    items: [{ productId: "p4", qty: 10, price: 3200 }],
-  },
-  {
-    id: "INV-0003",
-    type: "invoice",
-    customerId: "c4",
-    date: "2026-06-12",
-    dueDate: "2026-06-12",
-    status: "paid",
-    paymentMethod: "cash",
-    items: [{ productId: "p4", qty: 1, price: 3200 }],
-  },
-];
-
 const yen = (n) => "¥" + Math.round(n).toLocaleString("ja-JP");
 const today = () => new Date().toISOString().slice(0, 10);
+
+// ---------- データベース行 <-> アプリ内データ 変換 ----------
+
+const customerFromRow = (row) => ({
+  id: row.id,
+  kind: row.kind,
+  name: row.name,
+  contact: row.contact ?? "",
+  phone: row.phone ?? "",
+  email: row.email ?? "",
+  address: row.address ?? "",
+});
+const customerToRow = (c) => ({
+  kind: c.kind,
+  name: c.name,
+  contact: c.contact ?? "",
+  phone: c.phone ?? "",
+  email: c.email ?? "",
+  address: c.address ?? "",
+});
+
+const productFromRow = (row) => ({
+  id: row.id,
+  name: row.name,
+  price: Number(row.price),
+  stock: Number(row.stock),
+  unit: row.unit ?? "個",
+  lowStock: Number(row.low_stock ?? 5),
+});
+const productToRow = (p) => ({
+  name: p.name,
+  price: p.price,
+  stock: p.stock,
+  unit: p.unit,
+  low_stock: p.lowStock,
+});
+
+const docFromRow = (row) => ({
+  id: row.id,
+  docNumber: row.doc_number,
+  type: row.type,
+  customerId: row.customer_id,
+  date: row.date,
+  dueDate: row.due_date,
+  status: row.status,
+  paymentMethod: row.payment_method,
+  items: row.items ?? [],
+});
+const docToRow = (d) => ({
+  doc_number: d.docNumber,
+  type: d.type,
+  customer_id: d.customerId,
+  date: d.date,
+  due_date: d.dueDate || null,
+  status: d.status,
+  payment_method: d.paymentMethod,
+  items: d.items,
+});
+
+// ---------- 共通UI部品 ----------
 
 function NavItem({ icon: Icon, label, active, onClick, badge }) {
   return (
@@ -129,18 +137,18 @@ function StatCard({ label, value, sub, trend, icon: Icon }) {
 
 function Modal({ title, onClose, children, wide }) {
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-3 md:p-4" onClick={onClose}>
       <div
         className={`bg-white rounded-2xl shadow-xl w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[90vh] overflow-y-auto`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#ececec] sticky top-0 bg-white">
+        <div className="flex items-center justify-between px-4 md:px-6 py-4 border-b border-[#ececec] sticky top-0 bg-white">
           <h3 className="font-semibold text-[#23241f]">{title}</h3>
           <button onClick={onClose} className="text-[#9a9a92] hover:text-[#23241f]">
             <X size={18} />
           </button>
         </div>
-        <div className="p-6">{children}</div>
+        <div className="p-4 md:p-6">{children}</div>
       </div>
     </div>
   );
@@ -170,20 +178,42 @@ const STATUS_COLOR = {
   draft: "bg-[#eef0ec] text-[#6a6a62]",
   sent: "bg-[#e7eef7] text-[#3a64a8]",
 };
+// ---------- メインアプリ ----------
 
 export default function SalesApp() {
   const [page, setPage] = useState("dashboard");
-  const [customers, setCustomers] = useState(initialCustomers);
-  const [products, setProducts] = useState(initialProducts);
-  const [invoices, setInvoices] = useState(initialInvoices);
+  const [customers, setCustomers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [customerModal, setCustomerModal] = useState(null);
+  const [customerModal, setCustomerModal] = useState(null); // {editing} or null
   const [productModal, setProductModal] = useState(null);
   const [docModal, setDocModal] = useState(null);
-  const [receiptDoc, setReceiptDoc] = useState(null);
+  const [receiptDoc, setReceiptDoc] = useState(null); // 領収書表示中の請求書
   const [search, setSearch] = useState("");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // ---- 初回読み込み：Supabaseから全データを取得 ----
+  useEffect(() => {
+    const loadAll = async () => {
+      setLoading(true);
+      const [{ data: custData, error: custErr }, { data: prodData, error: prodErr }, { data: docData, error: docErr }] =
+        await Promise.all([
+          supabase.from("customers").select("*").order("created_at"),
+          supabase.from("products").select("*").order("created_at"),
+          supabase.from("documents").select("*").order("created_at"),
+        ]);
+      if (!custErr && custData) setCustomers(custData.map(customerFromRow));
+      if (!prodErr && prodData) setProducts(prodData.map(productFromRow));
+      if (!docErr && docData) setInvoices(docData.map(docFromRow));
+      setLoading(false);
+    };
+    loadAll();
+  }, []);
 
   const customerById = (id) => customers.find((c) => c.id === id);
+  const productById = (id) => products.find((p) => p.id === id);
 
   const docTotal = (doc) => doc.items.reduce((sum, it) => sum + it.qty * it.price, 0);
 
@@ -196,56 +226,99 @@ export default function SalesApp() {
     return { totalSales, unpaidTotal, lowStockCount, unpaidCount: unpaidInvoices.length };
   }, [invoices, products]);
 
-  const saveCustomer = (data) => {
+  // ---- 顧客 CRUD ----
+  const saveCustomer = async (data) => {
     if (data.id) {
+      const { error } = await supabase.from("customers").update(customerToRow(data)).eq("id", data.id);
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
       setCustomers((cs) => cs.map((c) => (c.id === data.id ? data : c)));
     } else {
-      setCustomers((cs) => [...cs, { ...data, id: "c" + (cs.length + 1) + "_" + Date.now() }]);
+      const { data: inserted, error } = await supabase.from("customers").insert(customerToRow(data)).select().single();
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
+      setCustomers((cs) => [...cs, customerFromRow(inserted)]);
     }
     setCustomerModal(null);
   };
-  const deleteCustomer = (id) => {
+  const deleteCustomer = async (id) => {
     if (invoices.some((d) => d.customerId === id)) {
       alert("この取引先には見積書/請求書の履歴があるため削除できません。");
       return;
     }
+    const { error } = await supabase.from("customers").delete().eq("id", id);
+    if (error) { alert("削除に失敗しました: " + error.message); return; }
     setCustomers((cs) => cs.filter((c) => c.id !== id));
   };
 
-  const saveProduct = (data) => {
+  // ---- 商品 CRUD ----
+  const saveProduct = async (data) => {
     if (data.id) {
+      const { error } = await supabase.from("products").update(productToRow(data)).eq("id", data.id);
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
       setProducts((ps) => ps.map((p) => (p.id === data.id ? data : p)));
     } else {
-      setProducts((ps) => [...ps, { ...data, id: "p" + (ps.length + 1) + "_" + Date.now() }]);
+      const { data: inserted, error } = await supabase.from("products").insert(productToRow(data)).select().single();
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
+      setProducts((ps) => [...ps, productFromRow(inserted)]);
     }
     setProductModal(null);
   };
-  const deleteProduct = (id) => setProducts((ps) => ps.filter((p) => p.id !== id));
+  const deleteProduct = async (id) => {
+    const { error } = await supabase.from("products").delete().eq("id", id);
+    if (error) { alert("削除に失敗しました: " + error.message); return; }
+    setProducts((ps) => ps.filter((p) => p.id !== id));
+  };
 
-  const saveDoc = (data) => {
-    if (data.id && invoices.some((d) => d.id === data.id)) {
+  // ---- 見積/請求 CRUD ----
+  const nextDocNumber = (type) => {
+    const prefix = type === "estimate" ? "EST" : "INV";
+    const count = invoices.filter((d) => d.type === type).length + 1;
+    return `${prefix}-${String(count).padStart(4, "0")}`;
+  };
+
+  const saveDoc = async (data) => {
+    if (data.id) {
+      const { error } = await supabase.from("documents").update(docToRow(data)).eq("id", data.id);
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
       setInvoices((ds) => ds.map((d) => (d.id === data.id ? data : d)));
     } else {
-      const prefix = data.type === "estimate" ? "EST" : "INV";
-      const count = invoices.filter((d) => d.type === data.type).length + 1;
-      const id = `${prefix}-${String(count).padStart(4, "0")}`;
-      setInvoices((ds) => [...ds, { ...data, id }]);
+      const docNumber = nextDocNumber(data.type);
+      const { data: inserted, error } = await supabase
+        .from("documents")
+        .insert(docToRow({ ...data, docNumber }))
+        .select()
+        .single();
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
+      setInvoices((ds) => [...ds, docFromRow(inserted)]);
     }
     setDocModal(null);
   };
-  const deleteDoc = (id) => setInvoices((ds) => ds.filter((d) => d.id !== id));
+  const deleteDoc = async (id) => {
+    const { error } = await supabase.from("documents").delete().eq("id", id);
+    if (error) { alert("削除に失敗しました: " + error.message); return; }
+    setInvoices((ds) => ds.filter((d) => d.id !== id));
+  };
 
-  const convertToInvoice = (estimate) => {
-    const count = invoices.filter((d) => d.type === "invoice").length + 1;
-    const newInvoice = {
+  const convertToInvoice = async (estimate) => {
+    const docNumber = nextDocNumber("invoice");
+    const newInvoiceData = {
       ...estimate,
-      id: `INV-${String(count).padStart(4, "0")}`,
+      docNumber,
       type: "invoice",
       status: "unpaid",
       date: today(),
     };
-    setInvoices((ds) => [...ds, newInvoice]);
+    const { data: inserted, error } = await supabase
+      .from("documents")
+      .insert(docToRow(newInvoiceData))
+      .select()
+      .single();
+    if (error) { alert("変換に失敗しました: " + error.message); return; }
+    setInvoices((ds) => [...ds, docFromRow(inserted)]);
     setPage("invoices");
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
   };
 
   const filteredCustomers = customers.filter(
@@ -257,7 +330,7 @@ export default function SalesApp() {
       .filter((d) => d.type === type)
       .filter((d) => {
         const cust = customerById(d.customerId);
-        return !search || cust?.name.includes(search) || d.id.includes(search);
+        return !search || cust?.name.includes(search) || d.docNumber.includes(search);
       })
       .sort((a, b) => (a.date < b.date ? 1 : -1));
 
@@ -270,9 +343,81 @@ export default function SalesApp() {
     { key: "reports", label: "売上レポート", icon: BarChart3 },
   ];
 
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#f4f3ee]">
+        <div className="flex flex-col items-center gap-3 text-[#5a6a64]">
+          <Loader2 size={28} className="animate-spin" />
+          <span className="text-sm">データを読み込んでいます...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-[#f4f3ee] text-[#23241f]" style={{ fontFamily: "'Hiragino Sans', 'Noto Sans JP', sans-serif" }}>
-      <aside className="w-60 bg-[#fbfaf6] border-r border-[#e3e3dd] flex flex-col p-4 shrink-0">
+    <div className="flex flex-col md:flex-row h-screen bg-[#f4f3ee] text-[#23241f]" style={{ fontFamily: "'Hiragino Sans', 'Noto Sans JP', sans-serif" }}>
+      {/* モバイル用ヘッダー */}
+      <header className="md:hidden flex items-center justify-between px-4 py-3 bg-[#fbfaf6] border-b border-[#e3e3dd] shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-[#1c3d34] flex items-center justify-center text-white font-bold text-xs">販</div>
+          <span className="font-semibold text-sm">販売管理</span>
+        </div>
+        <button
+          onClick={() => setMobileMenuOpen(true)}
+          className="p-2 rounded-lg text-[#5a6a64] hover:bg-[#e8ece9]"
+          aria-label="メニューを開く"
+        >
+          <Menu size={20} />
+        </button>
+      </header>
+
+      {/* モバイル用メニュー（オーバーレイ） */}
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 z-40 flex">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setMobileMenuOpen(false)} />
+          <aside className="relative w-64 bg-[#fbfaf6] flex flex-col p-4 h-full shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 px-2 py-1">
+                <div className="w-8 h-8 rounded-lg bg-[#1c3d34] flex items-center justify-center text-white font-bold text-sm">販</div>
+                <div>
+                  <div className="font-semibold text-sm leading-tight">販売管理</div>
+                  <div className="text-[11px] text-[#9a9a92]">Sales Manager</div>
+                </div>
+              </div>
+              <button onClick={() => setMobileMenuOpen(false)} className="p-1.5 text-[#9a9a92]">
+                <X size={18} />
+              </button>
+            </div>
+            <nav className="flex flex-col gap-1">
+              {navConfig.map((n) => (
+                <NavItem
+                  key={n.key}
+                  icon={n.icon}
+                  label={n.label}
+                  badge={n.badge}
+                  active={page === n.key}
+                  onClick={() => {
+                    setPage(n.key);
+                    setSearch("");
+                    setMobileMenuOpen(false);
+                  }}
+                />
+              ))}
+            </nav>
+            <div className="mt-auto pt-3 border-t border-[#e3e3dd]">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-2 text-sm text-[#5a6a64] hover:text-[#c0524a] px-4 py-2.5 rounded-lg hover:bg-[#fbe9e7] transition-colors"
+              >
+                <LogOut size={16} /> ログアウト
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* PC用サイドバー */}
+      <aside className="hidden md:flex w-60 bg-[#fbfaf6] border-r border-[#e3e3dd] flex-col p-4 shrink-0">
         <div className="flex items-center gap-2 px-2 py-3 mb-4">
           <div className="w-8 h-8 rounded-lg bg-[#1c3d34] flex items-center justify-center text-white font-bold text-sm">販</div>
           <div>
@@ -295,13 +440,19 @@ export default function SalesApp() {
             />
           ))}
         </nav>
-        <div className="mt-auto px-2 py-3 text-[11px] text-[#aaa9a0] leading-relaxed">
-          このデモはブラウザ内のメモリにのみデータを保持します。再読み込みすると初期データに戻ります。
+        <div className="mt-auto px-2 py-3 border-t border-[#e3e3dd] pt-3">
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-2 text-sm text-[#5a6a64] hover:text-[#c0524a] px-2 py-2 rounded-lg hover:bg-[#fbe9e7] transition-colors"
+          >
+            <LogOut size={16} /> ログアウト
+          </button>
         </div>
       </aside>
 
+      {/* メインコンテンツ */}
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto p-8">
+        <div className="max-w-6xl mx-auto p-4 md:p-8">
           {page === "dashboard" && (
             <DashboardPage
               stats={stats}
@@ -320,7 +471,7 @@ export default function SalesApp() {
               onAction={() => setCustomerModal({})}
               search={search}
               setSearch={setSearch}
-              searchPlaceholder="氏名・会社名・担当者名で検索"
+              searchPlaceholder="会社名・担当者名で検索"
             >
               <CustomerTable
                 rows={filteredCustomers}
@@ -402,6 +553,7 @@ export default function SalesApp() {
     </div>
   );
 }
+// ---------- ページ: ダッシュボード ----------
 
 function DashboardPage({ stats, invoices, customerById, docTotal, products, setPage }) {
   const recentDocs = [...invoices].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 5);
@@ -412,7 +564,7 @@ function DashboardPage({ stats, invoices, customerById, docTotal, products, setP
       <h1 className="text-xl font-semibold mb-1">ダッシュボード</h1>
       <p className="text-sm text-[#8a8a82] mb-6">{today()} 時点の概況</p>
 
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-8">
         <StatCard label="支払済み売上合計" value={yen(stats.totalSales)} icon={TrendingUp} />
         <StatCard
           label="未払い請求"
@@ -436,7 +588,7 @@ function DashboardPage({ stats, invoices, customerById, docTotal, products, setP
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="col-span-2 bg-white rounded-xl border border-[#e3e3dd] p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-sm">最近の見積書・請求書</h2>
@@ -450,7 +602,7 @@ function DashboardPage({ stats, invoices, customerById, docTotal, products, setP
                 const cust = customerById(d.customerId);
                 return (
                   <tr key={d.id} className="border-t border-[#f0f0ec]">
-                    <td className="py-2.5 text-[#8a8a82] text-xs font-mono">{d.id}</td>
+                    <td className="py-2.5 text-[#8a8a82] text-xs font-mono">{d.docNumber}</td>
                     <td className="py-2.5">{cust?.name}</td>
                     <td className="py-2.5 text-[#8a8a82] text-xs">{d.date}</td>
                     <td className="py-2.5 text-right font-medium tabular-nums">{yen(docTotal(d))}</td>
@@ -493,14 +645,16 @@ function DashboardPage({ stats, invoices, customerById, docTotal, products, setP
   );
 }
 
+// ---------- 共通: リストページ ----------
+
 function ListPage({ title, actionLabel, onAction, search, setSearch, searchPlaceholder, children }) {
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <h1 className="text-xl font-semibold">{title}</h1>
         <button
           onClick={onAction}
-          className="flex items-center gap-1.5 bg-[#1c3d34] text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-[#15302a] transition-colors"
+          className="flex items-center justify-center gap-1.5 bg-[#1c3d34] text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-[#15302a] transition-colors"
         >
           <Plus size={16} /> {actionLabel}
         </button>
@@ -514,7 +668,7 @@ function ListPage({ title, actionLabel, onAction, search, setSearch, searchPlace
           className="w-full pl-9 pr-3 py-2 rounded-lg border border-[#dadad2] text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1c3d34]/30"
         />
       </div>
-      <div className="bg-white rounded-xl border border-[#e3e3dd] overflow-hidden">{children}</div>
+      <div className="bg-white rounded-xl border border-[#e3e3dd] overflow-x-auto">{children}</div>
     </div>
   );
 }
@@ -527,10 +681,12 @@ function Th({ children, right }) {
   );
 }
 
+// ---------- 取引先テーブル ----------
+
 function CustomerTable({ rows, onEdit, onDelete }) {
   if (rows.length === 0) return <EmptyState text="取引先が見つかりません。" />;
   return (
-    <table className="w-full text-sm">
+    <table className="w-full min-w-[640px] text-sm">
       <thead className="bg-[#fafaf7] border-b border-[#ececec]">
         <tr>
           <Th>氏名・会社名</Th>
@@ -563,10 +719,12 @@ function CustomerTable({ rows, onEdit, onDelete }) {
   );
 }
 
+// ---------- 商品テーブル ----------
+
 function ProductTable({ rows, onEdit, onDelete }) {
   if (rows.length === 0) return <EmptyState text="商品が見つかりません。" />;
   return (
-    <table className="w-full text-sm">
+    <table className="w-full min-w-[560px] text-sm">
       <thead className="bg-[#fafaf7] border-b border-[#ececec]">
         <tr>
           <Th>商品名</Th>
@@ -602,10 +760,12 @@ function ProductTable({ rows, onEdit, onDelete }) {
   );
 }
 
+// ---------- 見積/請求テーブル ----------
+
 function DocTable({ rows, customerById, docTotal, onEdit, onDelete, onConvert, onReceipt }) {
   if (rows.length === 0) return <EmptyState text="該当するデータがありません。" />;
   return (
-    <table className="w-full text-sm">
+    <table className="w-full min-w-[760px] text-sm">
       <thead className="bg-[#fafaf7] border-b border-[#ececec]">
         <tr>
           <Th>番号</Th>
@@ -622,7 +782,7 @@ function DocTable({ rows, customerById, docTotal, onEdit, onDelete, onConvert, o
           const cust = customerById(d.customerId);
           return (
             <tr key={d.id} className="border-b border-[#f3f3ef] last:border-0 hover:bg-[#fafaf7]">
-              <td className="px-4 py-3 font-mono text-xs text-[#5a5a52]">{d.id}</td>
+              <td className="px-4 py-3 font-mono text-xs text-[#5a5a52]">{d.docNumber}</td>
               <td className="px-4 py-3 font-medium">{cust?.name ?? "—"}</td>
               <td className="px-4 py-3 text-[#5a5a52]">{d.date}</td>
               <td className="px-4 py-3 text-[#5a5a52]">{paymentLabel(d.paymentMethod)}</td>
@@ -682,6 +842,8 @@ function RowActions({ onEdit, onDelete }) {
 function EmptyState({ text }) {
   return <div className="px-4 py-10 text-center text-sm text-[#9a9a92]">{text}</div>;
 }
+
+// ---------- フォーム: 取引先 ----------
 
 function CustomerForm({ data, onSave, onClose }) {
   const [form, setForm] = useState({
@@ -749,6 +911,8 @@ function CustomerForm({ data, onSave, onClose }) {
   );
 }
 
+// ---------- フォーム: 商品 ----------
+
 function ProductForm({ data, onSave, onClose }) {
   const [form, setForm] = useState({
     id: data.id ?? null,
@@ -794,6 +958,7 @@ function ProductForm({ data, onSave, onClose }) {
     </Modal>
   );
 }
+// ---------- フォーム: 見積書・請求書 ----------
 
 function DocForm({ data, customers, products, onSave, onClose }) {
   const isInvoice = data.type === "invoice";
@@ -831,7 +996,16 @@ function DocForm({ data, customers, products, onSave, onClose }) {
 
   return (
     <Modal title={`${isInvoice ? "請求書" : "見積書"}${data.id ? "を編集" : "を作成"}`} onClose={onClose} wide>
-      <div className="grid grid-cols-2 gap-3 mb-2">
+      {(customers.length === 0 || products.length === 0) && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-[#fbe9e7] text-[#c0524a] text-sm">
+          {customers.length === 0 && products.length === 0
+            ? "先に取引先と商品を登録してください。"
+            : customers.length === 0
+            ? "先に取引先を登録してください。"
+            : "先に商品を登録してください。"}
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
         <Field label="取引先 *">
           <select className={inputCls} value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
             <option value="">選択してください</option>
@@ -949,6 +1123,8 @@ function DocForm({ data, customers, products, onSave, onClose }) {
   );
 }
 
+// ---------- ページ: 売上レポート ----------
+
 function ReportsPage({ invoices, customerById, docTotal, products }) {
   const paidInvoices = invoices.filter((d) => d.type === "invoice" && d.status === "paid");
 
@@ -987,7 +1163,7 @@ function ReportsPage({ invoices, customerById, docTotal, products }) {
         <div className="text-3xl font-semibold tabular-nums">{yen(grandTotal)}</div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-[#e3e3dd] p-5">
           <h2 className="font-semibold text-sm mb-4">取引先別 売上</h2>
           {byCustomer.length === 0 ? (
@@ -1040,9 +1216,11 @@ function ReportsPage({ invoices, customerById, docTotal, products }) {
   );
 }
 
+// ---------- 領収書モーダル ----------
+
 function ReceiptModal({ doc, customer, docTotal, onClose }) {
   const total = docTotal(doc);
-  const receiptNo = doc.id.replace("INV", "REC");
+  const receiptNo = doc.docNumber.replace("INV", "REC");
 
   return (
     <Modal title="領収書" onClose={onClose}>
@@ -1079,7 +1257,7 @@ function ReceiptModal({ doc, customer, docTotal, onClose }) {
             </tr>
             <tr className="border-t border-[#ececec]">
               <td className="py-2 text-[#8a8a82]">対象請求書</td>
-              <td className="py-2 font-mono text-xs">{doc.id}</td>
+              <td className="py-2 font-mono text-xs">{doc.docNumber}</td>
             </tr>
           </tbody>
         </table>
