@@ -1472,7 +1472,7 @@ function ReceiptModal({ doc, customer, docTotal, onClose }) {
       <div id="receipt-print-area" className="border border-[#dadad2] rounded-lg p-6 mb-5 bg-white">
         <div className="flex justify-between items-start mb-5 pb-5 border-b-2 border-[#1c3d34]">
           <div>
-            <h2 className="text-lg font-bold tracking-[0.25em] text-[#23241f]">領　収　書</h2>
+            <h2 className="text-lg font-bold tracking-[0.25em] text-[#23241f] whitespace-nowrap">領　収　書</h2>
             <div className="text-[10px] text-[#8a8a82] font-mono mt-1.5">No. {receiptNo}</div>
           </div>
           <div className="text-right text-[10px] text-[#5a5a52] leading-snug">
@@ -1551,9 +1551,9 @@ function PrintDocModal({ doc, customer, productById, docTotal, onClose }) {
       <div id="doc-print-area" className="border border-[#dadad2] rounded-lg p-6 md:p-8 mb-5 bg-white">
         <div className="flex justify-between items-start pb-5 mb-2 border-b-2 border-[#1c3d34]">
           <div>
-            <h2 className="text-xl font-bold tracking-[0.25em] text-[#23241f]">
-              {isInvoice ? "請　求　書" : "見　積　書"}
-            </h2>
+            <h2 className="text-xl font-bold tracking-[0.25em] text-[#23241f] whitespace-nowrap">
+  {isInvoice ? "請　求　書" : "見　積　書"}
+</h2>
             <div className="text-[10px] text-[#8a8a82] font-mono mt-1.5">No. {doc.docNumber}</div>
           </div>
           <div className="text-right text-[10px] text-[#5a5a52] leading-snug">
